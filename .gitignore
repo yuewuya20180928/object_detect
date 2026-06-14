@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 虚拟环境
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 数据与模型（大文件）
+data/*/raw/
+data/*/annotations/
+data/*.record
+pretrained/*.tar.gz
+pretrained/*/
+checkpoints/*/
+logs/
+outputs/
+
+# 日志
+*.log
+training.log
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# TensorBoard
+logs/
+runs/

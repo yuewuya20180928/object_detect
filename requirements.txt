@@ -1,0 +1,35 @@
+# TensorFlow 深度学习框架
+# 优先使用 TF 2.15+ (内置 Keras 3，对 Object Detection 兼容最好)
+tensorflow>=2.15.0
+
+# TF 官方 Model Garden（含 EfficientDet 等 SOTA 模型）
+# 用于加载预训练 backbone
+tf-models-official>=2.15.0
+
+# TensorFlow Addons（含优化器等）
+tensorflow-addons>=0.23.0
+
+# 图像处理
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# 标注处理（解析 COCO JSON / VOC XML）
+pycocotools>=2.0.7
+
+# 数据可视化
+matplotlib>=3.7.0
+
+# 进度条
+tqdm>=4.66.0
+
+# 配置文件（YAML 用于 pipeline.config）
+PyYAML>=6.0
+
+# ONNX 导出
+tf2onnx>=1.16.0
+onnx>=1.15.0
+onnxruntime>=1.16.0  # 用于本地验证 ONNX 模型
+
+# TensorBoard（已包含在 TF 中）
+# tensorboard>=2.15.0
