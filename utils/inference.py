@@ -12,6 +12,7 @@
 import json
 from pathlib import Path
 import numpy as np
+import tensorflow as tf
 
 
 # ============================================================================
@@ -134,3 +135,61 @@ def apply_per_class_thresh(boxes, scores, class_ids, per_class_thresh: dict, def
         for i in range(len(scores))
     ], dtype=bool)
     return boxes[keep], scores[keep], class_ids[keep]
+
+
+# ============================================================================
+# Batched NMS per class（TTA concat 用）
+# ============================================================================
+def batched_nms_per_class(boxes, scores, class_ids, iou_threshold: float = 0.5, max_output_size: int = 200):
+    """
+    Class-aware NMS：对每个 class 独立做 NMS，避免跨类合并
+
+    Args:
+        boxes:     (N, 4) xyxy
+        scores:    (N,)
+        class_ids: (N,) int
+        iou_threshold: 同类内 IoU 阈值
+        max_output_size: 每个类最多保留数
+
+    Returns:
+        (kept_boxes, kept_scores, kept_class_ids)
+    """
+    if len(boxes) == 0:
+        return (
+            np.zeros((0, 4), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.int32),
+        )
+    boxes = boxes.astype(np.float32)
+    scores = scores.astype(np.float32)
+    class_ids = class_ids.astype(np.int32)
+
+    out_b, out_s, out_c = [], [], []
+    for cls in np.unique(class_ids):
+        mask = class_ids == cls
+        cls_boxes = boxes[mask]
+        cls_scores = scores[mask]
+        if len(cls_boxes) == 0:
+            continue
+        # 用 TF NMS
+        sel = tf.image.non_max_suppression(
+            tf.constant(cls_boxes),
+            tf.constant(cls_scores),
+            max_output_size=max_output_size,
+            iou_threshold=iou_threshold,
+        ).numpy()
+        out_b.append(cls_boxes[sel])
+        out_s.append(cls_scores[sel])
+        out_c.append(np.full(len(sel), cls, dtype=np.int32))
+
+    if not out_b:
+        return (
+            np.zeros((0, 4), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.int32),
+        )
+    return (
+        np.concatenate(out_b, axis=0),
+        np.concatenate(out_s, axis=0),
+        np.concatenate(out_c, axis=0),
+    )

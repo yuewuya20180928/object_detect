@@ -25,7 +25,7 @@ TTA (Test-Time Augmentation) 性能：
   - 多尺度 + 水平 flip + NMS-concat 融合：val mAP 0.05→0.053 (+8%)
   - 默认 3 尺度 [320, 384, 448] + flip = 6 次推理/帧, 实时变慢
   - 生产推荐加 --skip-frames 5 + --tta-scales 320 384 减少延迟
-  - 验证脚本: od_project/evaluate_odapi_tta.py --tta-fusion nms
+  - 验证脚本: 从 od_project 提取到根目录的 evaluate_odapi_tta.py
 """
 
 import os
@@ -54,7 +54,6 @@ import config  # noqa: E402
 # 使用 TF OD API 官方 SavedModel (跳我们自己的 DetectionModel)
 ODAPI_MODEL_PATH = PROJECT_ROOT / "pretrained" / "ssd_mobilenet_v2_fpnlite_320x320_coco17_tpu-8" / "saved_model"
 from models.postprocess import decode_predictions  # noqa: E402
-sys.path.insert(0, str(PROJECT_ROOT / "od_project"))
 from utils.inference import batched_nms_per_class  # noqa: E402
 
 
