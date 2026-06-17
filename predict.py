@@ -101,15 +101,14 @@ def infer_single(det, image_path: Path, save_dir: Path, class_names: list,
     outputs = det.predict(inp, verbose=0)
 
     # 收集所有层的预测
+    # ★ 用 det.feature_spec 顺序而非 sorted：保证和训练时 anchor 拼接顺序一致
     raw_boxes = []
     raw_scores = []
-    for level in sorted(outputs.keys()):
-        if not level.startswith("cls_"):
-            continue
-        box_key = level.replace("cls_", "box_")
+    for level in det.feature_spec.keys():
+        box_key = f"box_{level}"
         # 形状: (1, H, W, num_anchors * (C+1)) / (1, H, W, num_anchors * 4)
-        cls = outputs[level][0]  # (H, W, num_anchors * (C+1))
-        box = outputs[box_key][0]  # (H, W, num_anchors * 4)
+        cls = outputs[f"cls_{level}"][0]  # (H, W, num_anchors * (C+1))
+        box = outputs[box_key][0]         # (H, W, num_anchors * 4)
         H, W = cls.shape[:2]
         cls = cls.reshape(H, W, -1, config.NUM_CLASSES + 1)
         box = box.reshape(H, W, -1, 4)

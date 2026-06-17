@@ -3,6 +3,11 @@
 """
 模型评估脚本
 
+⚠️ Self-Trained Path 已封存（2026-06-18）
+Keras DetectionModel 路径（self-trained weights）已封存，推荐使用 OD API + TTA：
+  python evaluate_odapi_tta.py --tta-fusion nms --max-imgs 1000
+baseline mAP@0.5 = 0.0488, TTA = 0.0530 (+8.6%)
+
 计算：
   - mAP@0.5
   - mAP@0.5:0.95
@@ -77,12 +82,12 @@ def evaluate_map(det, test_ds, class_names, score_thresh, nms_iou_thresh, logger
         # 收集该 batch 的预测
         for i in range(images.shape[0]):
             raw_boxes_list, raw_scores_list = [], []
-            for level in sorted(outputs.keys()):
-                if not level.startswith("cls_"):
-                    continue
-                box_key = level.replace("cls_", "box_")
-                cls = outputs[level][i].numpy()
-                box = outputs[box_key][i].numpy()
+            # ★ 用 det.feature_spec 顺序而非 sorted：保证和训练时 anchor 拼接顺序一致
+            for level in det.feature_spec.keys():
+                box_key = f"box_{level}"
+                # det.predict() 返回的 outputs 已是 numpy 数组，无需 .numpy()
+                cls = np.asarray(outputs[f"cls_{level}"][i])
+                box = np.asarray(outputs[box_key][i])
                 H, W = cls.shape[:2]
                 cls = cls.reshape(H, W, -1, config.NUM_CLASSES + 1).reshape(-1, config.NUM_CLASSES + 1)
                 box = box.reshape(H, W, -1, 4).reshape(-1, 4)
@@ -110,15 +115,36 @@ def evaluate_map(det, test_ds, class_names, score_thresh, nms_iou_thresh, logger
             # 真值
             gt_boxes = labels["boxes"][i].numpy()
             gt_classes = labels["classes"][i].numpy()
+            # ★ class ID 偏移修正：TFRecord 里是 1-80（COCO id），预测输出是 0-79（去掉 background 后）
+            # 这里减去 1，使 GT 和预测统一在 0-79 空间
+            gt_classes = gt_classes - 1
+            # 原始图尺寸（H, W）—— 用于 letterbox 反推
+            orig_h, orig_w = labels["original_shape"][i].numpy()
             # 过滤空框
             valid = (gt_boxes[..., 2] > 0) & (gt_boxes[..., 3] > 0)
             gt_boxes = gt_boxes[valid]
             gt_classes = gt_classes[valid]
-            # 转为 xyxy
+            # 转为 xyxy（仍是原图归一化坐标）
             cx, cy, w, h = gt_boxes[..., 0], gt_boxes[..., 1], gt_boxes[..., 2], gt_boxes[..., 3]
+            # ★ 关键修复：GT 是原图归一化坐标，需要套上 letterbox 变换到 input_size 像素空间
+            # letterbox 变换：scale = input_size / max(H, W)，pad = (input_size - W*scale) / 2
+            in_size = images.shape[1]  # input_size (e.g. 320)
+            scale = in_size / max(orig_h, orig_w)
+            # ⚠️ 关键: 跟 dataset_builder.py 的 resize_with_padding 保持一致用 int() 截断
+            # 原代码用 float new_w/new_h 算 pad, 跟 dataset 实际 int(orig_w*scale)+(input_size-int)//2
+            # 的 image 像素位置偏 0-0.75 像素, 拉低 mAP
+            new_w = int(orig_w * scale)
+            new_h = int(orig_h * scale)
+            pad_x = (in_size - new_w) // 2
+            pad_y = (in_size - new_h) // 2
+            # 原图归一化 → 原图像素 → letterbox 像素
+            cx_px = cx * new_w + pad_x
+            cy_px = cy * new_h + pad_y
+            w_px  = w  * new_w
+            h_px  = h  * new_h
             gt_boxes_xyxy = np.stack([
-                cx - w/2, cy - h/2, cx + w/2, cy + h/2
-            ], axis=-1)
+                cx_px - w_px/2, cy_px - h_px/2, cx_px + w_px/2, cy_px + h_px/2
+            ], axis=-1).astype(np.float32)
             all_gts.append({
                 "boxes": gt_boxes_xyxy,
                 "class_ids": gt_classes,

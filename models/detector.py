@@ -141,6 +141,9 @@ def build_fpn(feature_maps: Dict[str, tf.Tensor], out_channels: int = 256, num_l
             smoothed = layers.Activation("relu", name=f"fpn_{level}_smooth_relu")(smoothed)
             fpn_outputs[level] = smoothed
 
+    # ★ 关键修复：按 P3→P7 字母序排序返回 dict，确保训练和推理时拼接顺序一致
+    # （修复前是插入序 P5, P4, P3, P6, P7，与 sorted 顺序 P3, P4, P5, P6, P7 错位）
+    fpn_outputs = {k: fpn_outputs[k] for k in sorted(fpn_outputs.keys())}
     return fpn_outputs
 
 
@@ -170,16 +173,39 @@ def build_detection_head(
     cls_outputs = {}
     box_outputs = {}
     for level, fmap in feature_maps.items():
-        # 共享特征
+        # 共享特征（增强：3 层卷积 + BN）
         x = layers.Conv2D(256, 3, padding="same",
-                          name=f"{name_prefix}_{level}_shared")(fmap)
-        x = layers.Activation("relu", name=f"{name_prefix}_{level}_shared_relu")(x)
+                          name=f"{name_prefix}_{level}_shared1")(fmap)
+        x = layers.BatchNormalization(name=f"{name_prefix}_{level}_shared1_bn")(x)
+        x = layers.Activation("relu", name=f"{name_prefix}_{level}_shared1_relu")(x)
+
+        x = layers.Conv2D(256, 3, padding="same",
+                          name=f"{name_prefix}_{level}_shared2")(x)
+        x = layers.BatchNormalization(name=f"{name_prefix}_{level}_shared2_bn")(x)
+        x = layers.Activation("relu", name=f"{name_prefix}_{level}_shared2_relu")(x)
+
+        x = layers.Conv2D(256, 3, padding="same",
+                          name=f"{name_prefix}_{level}_shared3")(x)
+        x = layers.BatchNormalization(name=f"{name_prefix}_{level}_shared3_bn")(x)
+        x = layers.Activation("relu", name=f"{name_prefix}_{level}_shared3_relu")(x)
+
+        # 分类分支（2 层：中间层 + 输出层）
+        cls_x = layers.Conv2D(256, 3, padding="same",
+                              name=f"{name_prefix}_{level}_cls_hidden")(x)
+        cls_x = layers.BatchNormalization(name=f"{name_prefix}_{level}_cls_hidden_bn")(cls_x)
+        cls_x = layers.Activation("relu", name=f"{name_prefix}_{level}_cls_hidden_relu")(cls_x)
         # 分类 (num_classes+1 含背景)
-        cls = layers.Conv2D(num_anchors * (num_classes + 1), 3, padding="same",
-                            name=f"{name_prefix}_{level}_cls")(x)
+        cls = layers.Conv2D(num_anchors * (num_classes + 1), 1, padding="same",
+                            name=f"{name_prefix}_{level}_cls")(cls_x)
+
+        # 回归分支（2 层：中间层 + 输出层）
+        box_x = layers.Conv2D(256, 3, padding="same",
+                               name=f"{name_prefix}_{level}_box_hidden")(x)
+        box_x = layers.BatchNormalization(name=f"{name_prefix}_{level}_box_hidden_bn")(box_x)
+        box_x = layers.Activation("relu", name=f"{name_prefix}_{level}_box_hidden_relu")(box_x)
         # 回归
-        box = layers.Conv2D(num_anchors * 4, 3, padding="same",
-                            name=f"{name_prefix}_{level}_box")(x)
+        box = layers.Conv2D(num_anchors * 4, 1, padding="same",
+                            name=f"{name_prefix}_{level}_box")(box_x)
         cls_outputs[level] = cls
         box_outputs[level] = box
     return {"cls_logits": cls_outputs, "box_deltas": box_outputs}

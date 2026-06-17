@@ -41,3 +41,15 @@ Thumbs.db
 # TensorBoard
 logs/
 runs/
+
+# 临时 debug / 可视化产物
+debug_*.py
+deep_diagnose.py
+debug_viz/
+*.py.bak
+*.bak
+od_project/data/
+od_project/data/
+od_project/logs/
+od_project/pretrained/
+od_project/__pycache__/

@@ -2,6 +2,29 @@
 
 基于 TensorFlow 2.x 的通用目标检测框架，支持 **三档预训练模型** + **两档数据集** 自由组合，采用 **迁移学习** 训练策略。
 
+## ⚠️ Self-Trained 路径已封存（2026-06-18）
+
+`checkpoints/speed_coco/` 已重命名为 `checkpoints/archive_unused_self_trained_2026/`。原因：30 epoch 训练坍缩到只预测 person（mAP 0.0003），根因为 OHEM 强化 person 预测。
+
+**主路径（推荐）**：TF OD API pretrained + TTA
+- 评估：`od_project/evaluate_odapi_tta.py`（baseline mAP@0.5 = 0.0488）
+- TTA：`--tta-fusion nms`（+8.6% → **0.0530**）
+- 演示：`demo_odapi.py --tta`
+
+**如需恢复 self-trained**：`mv checkpoints/archive_unused_self_trained_2026 checkpoints/speed_coco`
+
+## ⚠️ Self-Trained 路径已封存（2026-06-18）
+
+`checkpoints/speed_coco/` 已重命名为 `checkpoints/archive_unused_self_trained_2026/`。原因：30 epoch 训练坍缩到只预测 person（mAP 0.0003），根因为 OHEM 强化 person 预测。
+
+**主路径（推荐使用）**：
+- 模型：TF OD API pretrained (`pretrained/ssd_mobilenet_v2_fpnlite_320x320_coco17_tpu-8`)
+- 评估：`od_project/evaluate_odapi_tta.py`（baseline mAP@0.5 = 0.0488）
+- TTA：`evaluate_odapi_tta.py --tta-fusion nms`（+8.6% → **0.0530**）
+- 演示：`demo_odapi.py --tta`
+
+**如需恢复 self-trained**：`mv checkpoints/archive_unused_self_trained_2026 checkpoints/speed_coco`
+
 ## ✨ 核心特性
 
 - 🔧 **配置驱动**：`config.py` 改一行切换模型/数据集

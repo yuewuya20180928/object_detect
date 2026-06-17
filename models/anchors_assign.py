@@ -57,8 +57,8 @@ def assign_anchors_to_gt(
     anchors: tf.Tensor,
     gt_boxes: tf.Tensor,
     gt_labels: tf.Tensor,
-    pos_iou_threshold: float = 0.5,
-    neg_iou_threshold: float = 0.4,
+    pos_iou_threshold: float = 0.4,    # ↓ 0.5→0.4：提高正样本 recall
+    neg_iou_threshold: float = 0.3,    # ↓ 0.4→0.3：配合正样本阈值，留出 0.3-0.4 ignore 缓冲
 ) -> Tuple[tf.Tensor, tf.Tensor]:
     """
     将每个 anchor 分配为正/负/忽略（纯 tf.where，无 tf.cond）
