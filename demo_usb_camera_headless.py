@@ -95,7 +95,11 @@ def unletterbox_boxes(boxes_320, scale, pad_x, pad_y):
 
 
 def draw_boxes(image, boxes, scores, class_ids, fps=None, n_det=None, threshold=None):
-    """在 BGR 图像上画检测框 + 状态条"""
+    """在 BGR 图像上画检测框 + 状态条
+
+    2026-06-22 patch (Patch C)：标签背景 clamp 到画面内
+      - 横向贴边往内缩（避免 x1≈0 时贴死左边缘）
+      - 纵向顶部放不下挪到框内（避免 y1<th+6 时画到画面外）"""
     H, W = image.shape[:2]
     for box, score, cid in zip(boxes, scores, class_ids):
         x1, y1, x2, y2 = box.astype(int)
@@ -110,8 +114,16 @@ def draw_boxes(image, boxes, scores, class_ids, fps=None, n_det=None, threshold=
         name = COCO_NAMES[cid] if cid < len(COCO_NAMES) else f"cls{cid}"
         label = f"{name} {score:.0%}"
         (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        cv2.rectangle(image, (x1, y1 - th - 6), (x1 + tw + 4, y1), color, -1)
-        cv2.putText(image, label, (x1 + 2, y1 - 4),
+        # 标签背景 clamp
+        lbl_x0 = max(2, min(x1, W - tw - 6))
+        lbl_x1 = lbl_x0 + tw + 4
+        lbl_y1 = y1
+        lbl_y0 = lbl_y1 - th - 6
+        if lbl_y0 < 2:
+            lbl_y0 = y1 + 2
+            lbl_y1 = lbl_y0 + th + 6
+        cv2.rectangle(image, (lbl_x0, lbl_y0), (lbl_x1, lbl_y1), color, -1)
+        cv2.putText(image, label, (lbl_x0 + 2, lbl_y1 - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     # 状态条
     if fps is not None:

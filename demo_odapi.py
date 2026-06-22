@@ -60,18 +60,33 @@ from utils.inference import batched_nms_per_class  # noqa: E402
 # ============================================================================
 # COCO 80 类名
 # ============================================================================
+# COCO 90-id 标签（gapped，0-indexed = detection_classes - 1）
+# OD API 预训练模型用 90-class gapped 标签图，10 个位置（11,25,28,29,44,65,67,68,70,82）为空洞
+# 用 contiguous 80 项会从第一个空洞开始全部错位 → person 总对、其他全错
 COCO_NAMES = [
     "person","bicycle","car","motorcycle","airplane","bus","train","truck",
-    "boat","traffic light","fire hydrant","stop sign","parking meter","bench",
+    "boat","traffic light","fire hydrant", None,
+    "stop sign","parking meter","bench",
     "bird","cat","dog","horse","sheep","cow","elephant","bear","zebra","giraffe",
-    "backpack","umbrella","handbag","tie","suitcase","frisbee","skis","snowboard",
+    None,
+    "backpack","umbrella",
+    None, None,
+    "handbag","tie","suitcase","frisbee","skis","snowboard",
     "sports ball","kite","baseball bat","baseball glove","skateboard","surfboard",
-    "tennis racket","bottle","wine glass","cup","fork","knife","spoon","bowl",
+    "tennis racket","bottle",
+    None,
+    "wine glass","cup","fork","knife","spoon","bowl",
     "banana","apple","sandwich","orange","broccoli","carrot","hot dog","pizza",
-    "donut","cake","chair","couch","potted plant","bed","dining table","toilet",
-    "tv","laptop","mouse","remote","keyboard","cell phone","microwave","oven",
-    "toaster","sink","refrigerator","book","clock","vase","scissors","teddy bear",
-    "hair drier","toothbrush",
+    "donut","cake","chair","couch","potted plant","bed",
+    None,
+    "dining table",
+    None, None,
+    "toilet",
+    None,
+    "tv","laptop","mouse","remote","keyboard","cell phone","microwave",
+    "oven","toaster","sink","refrigerator",
+    None,
+    "book","clock","vase","scissors","teddy bear","hair drier","toothbrush",
 ]
 
 # 每个类固定颜色（HSV 离散，颜色分散易区分）
@@ -118,29 +133,70 @@ def unletterbox_boxes(boxes_320: np.ndarray, scale: float, pad_x: int, pad_y: in
     return out
 
 
+def cross_class_nms(boxes: np.ndarray, scores: np.ndarray, class_ids: np.ndarray,
+                    iou_thresh: float = 0.5) -> tuple:
+    """class-agnostic NMS：OD API SavedModel 自带 per-class NMS，但同区域不同类都存活
+    这里再加一次跨类 NMS，干掉同一区域的不同类重复检测（实测有 bird+cat、toilet+keyboard 案例）"""
+    if len(boxes) == 0:
+        return boxes, scores, class_ids
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+    order = scores.argsort()[::-1]
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+        w = np.maximum(0.0, xx2 - xx1)
+        h = np.maximum(0.0, yy2 - yy1)
+        inter = w * h
+        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
+        inds = np.where(iou <= iou_thresh)[0]
+        order = order[inds + 1]
+    return boxes[keep], scores[keep], class_ids[keep]
+
+
 def draw_boxes(image: np.ndarray, boxes: np.ndarray, scores: np.ndarray, class_ids: np.ndarray,
                thickness: int = 2) -> np.ndarray:
-    """画 bbox + 标签（类名 + 置信度），class 颜色 + 白色文字 + LINE_AA"""
+    """画 bbox + 标签（类名 + 置信度），class 颜色 + 白色文字 + LINE_AA
+
+    2026-06-22 patch：
+      - cid 越界或落到 gapped 空洞 → 跳过（避免 cls80 污染画面）
+      - 标签背景 clamp 到画面内（避免 y1<6 时画到画面外、x1≈0 时贴死左边缘）"""
     H, W = image.shape[:2]
     for box, score, cid in zip(boxes, scores, class_ids):
         x1, y1, x2, y2 = box.astype(int)
+        # bbox clamp
         x1 = max(0, min(W - 1, x1))
         y1 = max(0, min(H - 1, y1))
         x2 = max(0, min(W - 1, x2))
         y2 = max(0, min(H - 1, y2))
         if x2 <= x1 or y2 <= y1:
             continue
+        # cid 越界或 gapped 空洞 → 跳过
+        if cid < 0 or cid >= len(COCO_NAMES) or COCO_NAMES[cid] is None:
+            continue
+        name = COCO_NAMES[cid]
+        label = f"{name} {score:.0%}"
+        (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        # 标签背景 clamp：横向贴边往内缩，纵向顶部放不下挪到框内
+        lbl_x0 = max(2, min(x1, W - tw - 6))
+        lbl_x1 = lbl_x0 + tw + 4
+        lbl_y1 = y1
+        lbl_y0 = lbl_y1 - th - 6
+        if lbl_y0 < 2:                    # 顶部放不下 → 挪到框内顶部
+            lbl_y0 = y1 + 2
+            lbl_y1 = lbl_y0 + th + 6
         color = tuple(int(c) for c in CLASS_COLORS[cid % 80])
         # 框
         cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
-        # 标签
-        name = COCO_NAMES[cid] if cid < len(COCO_NAMES) else f"cls{cid}"
-        label = f"{name} {score:.0%}"
-        (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         # 标签背景（filled，颜色和框一致）
-        cv2.rectangle(image, (x1, y1 - th - 6), (x1 + tw + 4, y1), color, -1)
+        cv2.rectangle(image, (lbl_x0, lbl_y0), (lbl_x1, lbl_y1), color, -1)
         # 标签文字（白色抗锯齿）
-        cv2.putText(image, label, (x1 + 2, y1 - 4),
+        cv2.putText(image, label, (lbl_x0 + 2, lbl_y1 - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     return image
 
@@ -439,6 +495,8 @@ def main():
                     sc = sc[:num][keep]
                     class_ids = class_ids[:num][keep]
                     boxes_orig = unletterbox_boxes(boxes_320, scale, pad_x, pad_y)
+                # 跨类 NMS：干掉同区域不同 cid 的重复检测（Patch B，2026-06-22）
+                boxes_orig, sc, class_ids = cross_class_nms(boxes_orig, sc, class_ids, iou_thresh=0.5)
                 # 统一应用 score_thresh
                 keep_final = sc >= score_thresh
                 last_result = (boxes_orig[keep_final], sc[keep_final], class_ids[keep_final])
@@ -468,6 +526,8 @@ def main():
                     sc = sc[:num][keep]
                     class_ids = class_ids[:num][keep]
                     boxes_orig = unletterbox_boxes(boxes_320, scale, pad_x, pad_y)
+                # 跨类 NMS：干掉同区域不同 cid 的重复检测（Patch B，2026-06-22）
+                boxes_orig, sc, class_ids = cross_class_nms(boxes_orig, sc, class_ids, iou_thresh=0.5)
                 keep_final = sc >= score_thresh
                 last_result = (boxes_orig[keep_final], sc[keep_final], class_ids[keep_final])
 
