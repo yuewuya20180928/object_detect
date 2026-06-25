@@ -39,11 +39,13 @@ from utils.metrics import compute_map
 from utils.inference import soft_nms, top_k_filter, load_per_class_thresh, apply_per_class_thresh, batched_nms_per_class
 from utils.logger import get_logger
 
-ODAPI_MODEL = PROJECT_ROOT / "pretrained/ssd_mobilenet_v2_fpnlite_320x320_coco17_tpu-8/saved_model"
+ODAPI_MODEL_DEFAULT = PROJECT_ROOT / "pretrained/ssd_mobilenet_v2_fpnlite_320x320_coco17_tpu-8/saved_model"
 
 
 def parse_args():
     p = argparse.ArgumentParser()
+    p.add_argument("--model-path", type=str, default=str(ODAPI_MODEL_DEFAULT),
+                   help="OD API saved_model 路径")
     p.add_argument("--tta-scales", type=int, nargs="+", default=[320, 384, 448],
                    help="TTA 多尺度推理的尺寸列表（默认 [320, 384, 448]）")
     p.add_argument("--tta-with-flip", action="store_true", default=True,
@@ -90,7 +92,7 @@ def detect_at_scale(detect_fn, image_float01, scale_size, flip: bool):
 
     boxes = detections["detection_boxes"][0].numpy()  # (100, 4) ymin xmin ymax xmax (归一化)
     scores = detections["detection_scores"][0].numpy()
-    classes = detections["detection_classes"][0].numpy().astype(np.int32)  # 1-based
+    classes = detections["detection_classes"][0].numpy().astype(np.int32)  # 1-based COCO
     num = int(detections["num_detections"][0].numpy())
 
     # 转 xyxy in letterbox 像素空间
@@ -125,8 +127,8 @@ def main():
                 f"fusion={args.tta_fusion}, WBF iou_thr={args.wbf_iou_thr}")
 
     # 加载 OD API
-    logger.info(f"加载 OD API SavedModel: {ODAPI_MODEL}")
-    detect_fn = tf.saved_model.load(str(ODAPI_MODEL))
+    logger.info(f"加载 OD API SavedModel: {args.model_path}")
+    detect_fn = tf.saved_model.load(str(args.model_path))
     signature = detect_fn.signatures["serving_default"]
     logger.info(f"签名输入: {list(signature.structured_input_signature[1].keys())}")
 

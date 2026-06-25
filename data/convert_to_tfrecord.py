@@ -68,6 +68,7 @@ def load_coco_annotations(
     image_dir: Path,
     logger,
     skip_empty: bool = True,
+    use_coco_cat_id: bool = False,
 ):
     """
     加载 COCO 格式标注
@@ -94,12 +95,20 @@ def load_coco_annotations(
     # 1. 建立图片 id → 图片信息索引
     images_index = {img["id"]: img for img in coco["images"]}
 
-    # 2. 建立 category_id 映射为连续的 1..N
-    #    COCO 原始 category_id 不一定连续，直接用会有空洞
-    cat_id_to_continuous = {
-        cat["id"]: idx + 1
-        for idx, cat in enumerate(sorted(coco["categories"], key=lambda c: c["id"]))
-    }
+    # 2. 建立 category_id 映射
+    #    use_coco_cat_id=True: 使用 COCO 原生 cat_id (1-80, 有空洞如 12, 26, 29 等)
+    #      跟 OD API saved_model 训练时完全一致(OD API 内部 cat_id 1-80 → label 0-79)
+    #    use_coco_cat_id=False: 重新编号为连续 1..N (sorted idx + 1)
+    #      旧版行为,会跟 OD API cat_id 错位 1+(parking meter/bear/...)
+    if use_coco_cat_id:
+        cat_id_to_continuous = {cat["id"]: cat["id"] for cat in coco["categories"]}
+        logger.info(f"  使用 COCO 原生 cat_id (1-80, 有空洞如 12, 26, 29) — 跟 OD API saved_model 一致")
+    else:
+        cat_id_to_continuous = {
+            cat["id"]: idx + 1
+            for idx, cat in enumerate(sorted(coco["categories"], key=lambda c: c["id"]))
+        }
+        logger.info(f"  使用重新编号 cat_id (1-80 连续) — 跟 OD API 错位 1+, 不推荐")
 
     # 3. 收集每张图的所有标注
     image_anns: Dict[int, List] = {img_id: [] for img_id in images_index}
@@ -221,9 +230,11 @@ def create_tf_example(
         xmaxs.append(xmax)
         ymaxs.append(ymax)
 
-        # 类别名：优先用真实名称，否则回退到 "object"
+        # 类别名：cat_id 1-80 保留空洞 (COCO 原生)
+        # category_names 80 项, 索引 = cat_id - 1 (因为 cat_id 1-80 跟 list 索引 0-79 对应)
+        # 例: cat_id=14 (parking meter) → category_names[13] = "parking meter" ✓
         cat_id = ann["category_id"]
-        if category_names:
+        if category_names and 1 <= cat_id <= len(category_names):
             cat_name = category_names[cat_id - 1].encode("utf-8")
         else:
             cat_name = b"object"
@@ -278,6 +289,7 @@ def convert_dataset(
     train_ann: str = None,
     val_ann: str = None,
     val_split_ratio: float = None,
+    use_coco_cat_id: bool = True,
 ):
     """
     将 COCO 格式数据集转换为 TFRecord
@@ -295,7 +307,39 @@ def convert_dataset(
     cfg = get_dataset_config(dataset)
     defaults = _DEFAULTS[dataset]
 
+    # 动态加载 category_names (从 COCO annotations 加载)
+    if cfg["category_names"] is None:
+        train_ann_for_names = data_dir / defaults["train_ann"]
+        if train_ann_for_names.exists():
+            import json
+            with open(train_ann_for_names, "r", encoding="utf-8") as f:
+                coco = json.load(f)
+            names = [""] * 90
+            for c in coco["categories"]:
+                if 1 <= c["id"] <= 90:
+                    names[c["id"] - 1] = c["name"]
+            cfg = dict(cfg)
+            cfg["category_names"] = names
+
+
+    # 动态加载 category_names (从 COCO annotations 加载, 避免手写 list 错位)
+    if cfg["category_names"] is None:
+        train_ann_for_names = data_dir / defaults["train_ann"]
+        if train_ann_for_names.exists():
+            import json
+            with open(train_ann_for_names, "r", encoding="utf-8") as f:
+                coco = json.load(f)
+            names = [""] * 90
+            for c in coco["categories"]:
+                if 1 <= c["id"] <= 90:
+                    names[c["id"] - 1] = c["name"]
+            cfg = dict(cfg)
+            cfg["category_names"] = names
+
     # 参数解析：命令行参数 > 默认值
+
+    cfg = get_dataset_config(dataset)
+    defaults = _DEFAULTS[dataset]
     train_images_dir = train_images_dir or defaults["train_images_dir"]
     val_images_dir   = val_images_dir   or defaults["val_images_dir"]
     train_ann        = train_ann        or defaults["train_ann"]
@@ -312,8 +356,8 @@ def convert_dataset(
     logger.info(f"Label map: {label_map_path} ({cfg['num_classes']} 类)")
 
     # 2. 加载标注
-    train_images = load_coco_annotations(train_ann_file, train_img_dir, logger)
-    val_images   = load_coco_annotations(val_ann_file,   val_img_dir,   logger)
+    train_images = load_coco_annotations(train_ann_file, train_img_dir, logger, use_coco_cat_id=use_coco_cat_id)
+    val_images   = load_coco_annotations(val_ann_file,   val_img_dir,   logger, use_coco_cat_id=use_coco_cat_id)
 
     # 3. 切分 val → val + test
     random.seed(config.RANDOM_SEED)
@@ -411,6 +455,12 @@ def main():
         help="验证标注文件路径（相对 data-dir），省略则使用数据集默认值",
     )
     parser.add_argument(
+        "--coco-cat-id",
+        action="store_true",
+        default=True,
+        help="使用 COCO 原生 cat_id (1-90) 而不是重新编号 1-80 (默认 True，修复 cat_id 错位)",
+    )
+    parser.add_argument(
         "--val-split-ratio",
         type=float,
         default=None,
@@ -428,6 +478,7 @@ def main():
         train_ann       = args.train_ann,
         val_ann         = args.val_ann,
         val_split_ratio = args.val_split_ratio,
+        use_coco_cat_id=args.coco_cat_id,
     )
 
 

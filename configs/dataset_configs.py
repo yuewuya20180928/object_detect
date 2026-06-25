@@ -30,25 +30,10 @@ DATASET_CONFIGS = {
         "annotation_format": "coco_json",
         "annotation_file": "annotations/instances_train2017.json",
         "val_annotation_file": "annotations/instances_val2017.json",
-        # 类别名（80 类，顺序与 COCO id 对齐）
-        "category_names": [
-            "person", "bicycle", "car", "motorcycle", "airplane",
-            "bus", "train", "truck", "boat", "traffic light",
-            "fire hydrant", "stop sign", "parking meter", "bench", "bird",
-            "cat", "dog", "horse", "sheep", "cow",
-            "elephant", "bear", "zebra", "giraffe", "backpack",
-            "umbrella", "handbag", "tie", "suitcase", "frisbee",
-            "skis", "snowboard", "sports ball", "kite", "baseball bat",
-            "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle",
-            "wine glass", "cup", "fork", "knife", "spoon",
-            "bowl", "banana", "apple", "sandwich", "orange",
-            "broccoli", "carrot", "hot dog", "pizza", "donut",
-            "cake", "chair", "couch", "potted plant", "bed",
-            "dining table", "toilet", "tv", "laptop", "mouse",
-            "remote", "keyboard", "cell phone", "microwave", "oven",
-            "toaster", "sink", "refrigerator", "book", "clock",
-            "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
-        ],
+        # 类别名动态生成：convert_to_tfrecord.py 运行时从 COCO annotations 加载
+        # 避免手写 90 项 list 容易错位
+        # cat_id 1-90 (含空洞 12, 26, 29, 30, 45, 66, 68, 69, 71, 83)
+        "category_names": None,  # None 表示从 COCO JSON 动态加载
     },
 
     # ---------------------- Objects365 ----------------------
@@ -107,15 +92,45 @@ def generate_label_map(mode: str, save_path: Path = None) -> Path:
     """
     cfg = get_dataset_config(mode)
 
-    # 如果类别名是 None（Objects365），从 annotation JSON 加载
+    # 如果类别名是 None，从 COCO annotations JSON 动态加载（避免手写 list 错位）
     if cfg["category_names"] is None:
-        # 留给后续实现：从 annotation 文件读取
-        raise NotImplementedError(
-            "Objects365 类别名需从 annotation JSON 动态加载"
-        )
+        import json
+        # 找 annotations JSON
+        data_dir = Path(save_path).parent if save_path else Path(__file__).parent.parent / "data" / mode
+        # data_dir 是 data/coco/, annotations 在 data/coco/raw/annotations/ 下
+        ann_files = [
+            data_dir / "raw" / "annotations" / "instances_train2017.json",
+            data_dir / "raw" / "annotations" / "instances_val2017.json",
+            data_dir / "annotations" / "instances_train2017.json",
+            data_dir / "annotations" / "instances_val2017.json",
+            data_dir / "raw" / "instances_train2017.json",
+            data_dir / "raw" / "instances_val2017.json",
+            data_dir / "instances_train2017.json",
+            data_dir / "instances_val2017.json",
+        ]
+        ann_file = None
+        for f in ann_files:
+            if f.exists():
+                ann_file = f
+                break
+        if ann_file is None:
+            raise FileNotFoundError(f"找不到 COCO annotations, 尝试: {[str(f) for f in ann_files]}")
+
+        with open(ann_file, "r", encoding="utf-8") as f:
+            coco = json.load(f)
+
+        # COCO cat_id 1-90，含空洞 (12, 26, 29, 30, 45, 66, 68, 69, 71, 83)
+        # 生成 list，索引 = cat_id - 1，空洞用空字符串
+        names = [""] * 90
+        for c in coco["categories"]:
+            if 1 <= c["id"] <= 90:
+                names[c["id"] - 1] = c["name"]
+        category_names_list = names
+    else:
+        category_names_list = cfg["category_names"]
 
     lines = []
-    for idx, name in enumerate(cfg["category_names"], start=1):
+    for idx, name in enumerate(category_names_list, start=1):
         lines.append("item {\n")
         lines.append(f"  id: {idx}\n")
         lines.append(f"  name: '{name}'\n")
@@ -126,7 +141,7 @@ def generate_label_map(mode: str, save_path: Path = None) -> Path:
         save_path = Path(__file__).parent.parent / "data" / mode / "label_map.pbtxt"
     save_path.parent.mkdir(parents=True, exist_ok=True)
     save_path.write_text(content, encoding="utf-8")
-    print(f"[label_map] {save_path}  ({cfg['num_classes']} 类)")
+    print(f"[label_map] {save_path}  ({len(category_names_list)} 项)")
     return save_path
 
 
